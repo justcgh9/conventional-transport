@@ -1,0 +1,281 @@
+openapi: 3.0.3
+info:
+  title: Innopolis Multimodal Transit API
+  description: >-
+    API Contract for the Thesis Project: "Simulation and Validation of a User-Centered 
+    Multimodal Transit Model". This API connects the React/Mobile Frontend with the 
+    Python/PuLP Backend.
+  version: 1.0.0
+  contact:
+    name: Thesis Team
+    email: student@innopolis.university
+
+servers:
+  - url: http://localhost:8000
+    description: Local Development Server
+  - url: http://192.168.1.X:8000
+    description: Laptop LAN IP (For Mobile/Capacitor testing)
+
+tags:
+  - name: Supply
+    description: Real-time location data of vehicles (Scooters/Cars).
+  - name: Routing
+    description: Core calculation engine using the PuLP mathematical model.
+  - name: Simulation
+    description: Admin controls to change environmental factors (Rain, Traffic).
+
+paths:
+  /api/v1/supply:
+    get:
+      tags:
+        - Supply
+      summary: Get current vehicle positions
+      description: Returns a list of all available scooters and carpool drivers on the map. Frontend should poll this.
+      responses:
+        '200':
+          description: Successful retrieval
+          content:
+            application/json:
+              schema:
+                components:
+                  schemas: VehicleList
+              example:
+                timestamp: "2023-10-27T10:30:00Z"
+                vehicles:
+                  - id: "s_01"
+                    type: "SCOOTER"
+                    lat: 55.7523
+                    lon: 48.7445
+                    battery_level: 88
+                  - id: "c_05"
+                    type: "CARPOOL_DRIVER"
+                    lat: 55.7550
+                    lon: 48.7500
+                    status: "MOVING"
+
+  /api/v1/route/calculate:
+    post:
+      tags:
+        - Routing
+      summary: Calculate Optimal Multimodal Route
+      description: Accepts Origin/Dest and User Weights. Runs the optimization algorithm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $$ref: '#/components/schemas/RouteRequest'
+      responses:
+        '200':
+          description: Optimal path found
+          content:
+            application/json:
+              schema:
+                $$ref: '#/components/schemas/RouteResponse'
+        '404':
+          description: No feasible route found (Constraints too tight)
+        '422':
+          description: Validation Error (e.g., weights don't sum to roughly 1.0)
+
+  /api/v1/simulation/scenario:
+    post:
+      tags:
+        - Simulation
+      summary: Set Urban Scenario
+      description: Updates the global physics/cost parameters of the backend (e.g., makes it rain).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scenario:
+                  $$ref: '#/components/schemas/ScenarioType'
+              required:
+                - scenario
+      responses:
+        '200':
+          description: Scenario updated successfully
+          content:
+            application/json:
+              example:
+                message: "Scenario changed to RAINY_WEATHER. Scooter speeds reduced to 10km/h."
+
+components:
+  schemas:
+    # --- Primitive Types ---
+    GeoPoint:
+      type: object
+      required:
+        - lat
+        - lon
+      properties:
+        lat:
+          type: number
+          format: double
+          example: 55.7539
+        lon:
+          type: number
+          format: double
+          example: 48.7432
+
+    # --- Enums ---
+    VehicleType:
+      type: string
+      enum:
+        - SCOOTER
+        - CARPOOL_DRIVER
+
+    TransportMode:
+      type: string
+      enum:
+        - WALK
+        - SCOOTER
+        - CARPOOL
+
+    ScenarioType:
+      type: string
+      enum:
+        - NORMAL
+        - MORNING_PEAK
+        - RAINY_WEATHER
+        - MAJOR_ACCIDENT
+
+    # --- Domain Objects ---
+    Vehicle:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          $$ref: '#/components/schemas/VehicleType'
+        lat:
+          type: number
+          format: double
+        lon:
+          type: number
+          format: double
+        battery_level:
+          type: integer
+          minimum: 0
+          maximum: 100
+        status:
+          type: string
+          example: "AVAILABLE"
+      required:
+        - id
+        - type
+        - lat
+        - lon
+
+    VehicleList:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        vehicles:
+          type: array
+          items:
+            $$ref: '#/components/schemas/Vehicle'
+
+    # --- Routing Request ---
+    UserWeights:
+      type: object
+      description: User preferences for the objective function (Lambda values). Should technically sum to 1.0, but backend can normalize.
+      properties:
+        w_time:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.5
+        w_cost:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.3
+        w_emissions:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.2
+        w_comfort:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.0
+
+    RouteRequest:
+      type: object
+      required:
+        - origin
+        - destination
+        - weights
+      properties:
+        origin:
+          $$ref: '#/components/schemas/GeoPoint'
+        destination:
+          $$ref: '#/components/schemas/GeoPoint'
+        weights:
+          $$ref: '#/components/schemas/UserWeights'
+
+    # --- Routing Response ---
+    RouteMetrics:
+      type: object
+      properties:
+        total_time_min:
+          type: number
+          example: 12.5
+        total_price_rub:
+          type: number
+          example: 145.00
+        total_emissions_g:
+          type: number
+          example: 350.5
+        satisfaction_score:
+          type: number
+          description: 1-10 scale
+          example: 8.2
+
+    RouteSegment:
+      type: object
+      description: A specific leg of the trip (e.g., coordinates for one specific street).
+      properties:
+        mode:
+          $$ref: '#/components/schemas/TransportMode'
+        distance_km:
+          type: number
+        duration_min:
+          type: number
+        instruction:
+          type: string
+          example: "Walk to Technopark Station"
+        geometry:
+          type: array
+          description: List of [lat, lon] points for drawing the line on the map.
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 2
+            maxItems: 2
+          example: [[55.75, 48.74], [55.751, 48.741]]
+
+    RouteResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [OPTIMAL, INFEASIBLE, ERROR]
+        metrics:
+          $$ref: '#/components/schemas/RouteMetrics'
+        segments:
+          type: array
+          items:
+            $$ref: '#/components/schemas/RouteSegment'
+
