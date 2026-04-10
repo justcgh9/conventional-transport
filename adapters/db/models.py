@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -27,7 +28,7 @@ class VehicleRow(Base):
     type = Column(String, nullable=False)
     lat = Column(Float, nullable=False)
     lon = Column(Float, nullable=False)
-    graph_node_id = Column(Integer, nullable=True)
+    graph_node_id = Column(BigInteger, nullable=True)
     is_available = Column(Boolean, default=True)
     battery_level = Column(Integer, nullable=True)
     capacity = Column(Integer, nullable=True)
@@ -78,8 +79,8 @@ class EdgeParameterRow(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     scenario_id = Column(Integer, nullable=False)
-    node_from = Column(Integer, nullable=False)
-    node_to = Column(Integer, nullable=False)
+    node_from = Column(BigInteger, nullable=False)
+    node_to = Column(BigInteger, nullable=False)
     distance_km = Column(Float, nullable=False)
     car_time_min = Column(Float)
     scooter_time_min = Column(Float)

@@ -73,7 +73,9 @@ class OptimizerEngine:
         # ---------------------------------------------------------------
         # Decision Variables
         # ---------------------------------------------------------------
-        edges = list(graph.edges())
+        # OSMnx returns a MultiDiGraph — deduplicate (u,v) pairs so that
+        # constraint names are unique and variables are well-defined.
+        edges = list(dict.fromkeys(graph.edges()))
 
         x: Dict[Tuple[int, int], pulp.LpVariable] = {}
         y: Dict[Tuple[int, int], pulp.LpVariable] = {}
@@ -191,19 +193,19 @@ class OptimizerEngine:
             if not p.scooter_available:
                 prob += (y[(u, v)] == 0, f"ScooterUnavail_{u}_{v}")
 
-        # C2 (paper 2.6.2): Travel Time Limits
-        for u, v in edges:
-            p = edge_params.get((u, v))
-            if p is None:
-                continue
-            prob += (
-                p.car_time_min * x[(u, v)] <= constraints.t_max_min,
-                f"CarTimeLimit_{u}_{v}",
-            )
-            prob += (
-                p.scooter_time_min * y[(u, v)] <= constraints.m_max_min,
-                f"ScooterTimeLimit_{u}_{v}",
-            )
+        # C2 (paper 2.6.2): Total Travel Time Limits (path-level, not per-edge)
+        total_car_time = pulp.lpSum(
+            edge_params[(u, v)].car_time_min * x[(u, v)]
+            for u, v in edges
+            if (u, v) in edge_params
+        )
+        total_scooter_time = pulp.lpSum(
+            edge_params[(u, v)].scooter_time_min * y[(u, v)]
+            for u, v in edges
+            if (u, v) in edge_params
+        )
+        prob += (total_car_time <= constraints.t_max_min, "CarTimeLimit")
+        prob += (total_scooter_time <= constraints.m_max_min, "ScooterTimeLimit")
 
         # C3 (paper 2.6.3): Emissions Cap
         all_emissions = []
@@ -220,34 +222,35 @@ class OptimizerEngine:
             "EmissionsCap",
         )
 
-        # C1 (paper 2.6.1): Vehicle Capacity
+        # C1 (paper 2.6.1): Vehicle Capacity + Activation.
+        # We model a single-passenger trip: the user occupies 1 seat.
+        # If any car edge is used (binary indicator b_car=1), at least one
+        # driver with capacity >= 1 must be activated.
+        # b_car = 1 iff sum(x) >= 1  (linearised with big-M)
         cap_mult = physics.capacity_multiplier if physics else 1.0
-        for d in drivers:
-            relevant_demand = pulp.lpSum(
-                edge_params[(u, v)].demand * x[(u, v)]
-                for u, v in edges
-                if (u, v) in edge_params
-            )
-            prob += (
-                relevant_demand
-                <= d.capacity * cap_mult + (1 - z[d.id]) * 10000,
-                f"Capacity_{d.id}",
-            )
-
-        # C7: Vehicle activation linking
-        # If any car edge is used, at least one vehicle must be active
+        b_car = pulp.LpVariable("b_car", cat=pulp.LpBinary)
         total_car_usage = pulp.lpSum(x[(u, v)] for u, v in edges)
-        total_z = pulp.lpSum(z[d.id] for d in drivers) if drivers else 0
+        M_edges = len(edges)
+        # b_car >= total_car_usage / M  →  b_car=1 when any car edge used
+        prob += (total_car_usage <= b_car * M_edges, "CarUsageUpper")
+        prob += (total_car_usage >= b_car, "CarUsageLower")
+
+        # At least one driver must be activated when car is used
+        total_z = pulp.lpSum(z[d.id] for d in drivers) if drivers else pulp.lpSum([])
         if drivers:
-            prob += (
-                total_car_usage <= total_z * len(edges),
-                "VehicleActivation",
-            )
+            prob += (b_car <= total_z, "VehicleActivation")
+
+        # Each activated driver must have capacity >= 1 passenger
+        for d in drivers:
+            effective_cap = d.capacity * cap_mult
+            if effective_cap < 1:
+                # Driver cannot carry anyone — force z=0
+                prob += (z[d.id] == 0, f"ZeroCapacity_{d.id}")
 
         # ---------------------------------------------------------------
         # Solve
         # ---------------------------------------------------------------
-        solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=30)
+        solver = pulp.PULP_CBC_CMD(msg=True, timeLimit=30)
         prob.solve(solver)
 
         elapsed = time.perf_counter() - start

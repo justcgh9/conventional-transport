@@ -70,7 +70,18 @@ class EdgeParameterGenerator:
 
         result: Dict[Tuple[int, int], EdgeParameters] = {}
 
+        # OSMnx returns a MultiDiGraph — collapse parallel edges by keeping
+        # the one with the shortest distance for each (u, v) pair.
+        seen_edges: Dict[Tuple[int, int], dict] = {}
         for u, v, data in graph.edges(data=True):
+            key = (u, v)
+            d = data.get("distance", data.get("length", 100) / 1000.0)
+            if key not in seen_edges or d < seen_edges[key].get(
+                "distance", float("inf")
+            ):
+                seen_edges[key] = data
+
+        for (u, v), data in seen_edges.items():
             d_km = data.get("distance", data.get("length", 100) / 1000.0)
 
             # --- Car travel time: Paper Eq. 1, Section 3.2.1 ---
